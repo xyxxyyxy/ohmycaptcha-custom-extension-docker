@@ -1,0 +1,46 @@
+services:
+  captcha-solver:
+    build: ./captcha-solver
+    container_name: captcha-solver
+    ports:
+      - "1232:8000"
+    environment:
+      - LLAMACPP_URL=https://llamacpp.xyxxyyxy.dev
+      - VISION_MODEL=Qwen3VL-8B-Instruct-Q8_0
+      - UNLOAD_AFTER_SOLVE=false
+    restart: unless-stopped
+
+  captcha-bridge:
+    build: ./captcha-bridge
+    container_name: captcha-bridge
+    ports:
+      - "1231:8000"
+    environment:
+      - SHIM_URL=http://captcha-solver:8000
+      - CDP_URL=http://host.docker.internal:9222
+      - CLIENT_KEY=local
+      - CAPTCHA_RETRIES=3
+      - CAPTCHA_TIMEOUT=60
+      - BROWSER_HEADLESS=false
+      - BROWSER_TIMEOUT=30
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    ports:
+      - "8191:8191"
+    environment:
+      - LOG_LEVEL=info
+      - BROWSER_TIMEOUT=120000
+      - CAPTCHA_SOLVER=none
+      - TZ=America/New_York
+    restart: unless-stopped

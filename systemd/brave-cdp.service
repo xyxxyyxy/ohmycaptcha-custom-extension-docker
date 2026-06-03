@@ -1,0 +1,24 @@
+[Unit]
+Description=Brave Browser with CDP for CAPTCHA Bridge
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Auto-detect display from environment
+ExecStartPre=-/usr/bin/pkill -f "remote-debugging-port=9222"
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/brave-browser \
+    --user-data-dir=%h/.config/BraveSoftware/Brave-Browser \
+    --remote-debugging-port=9222 \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-blink-features=AutomationControlled \
+    --window-size=1280,900 \
+    --remote-debugging-address=0.0.0.0 \
+    --start-maximized \
+    about:blank
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

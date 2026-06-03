@@ -1,0 +1,22 @@
+.captcha-solver {
+    cursor: pointer;
+    padding: 6px 12px;
+    background: #4CAF50;
+    color: #fff;
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: inline-block;
+    margin: 4px 0;
+    border: none;
+    user-select: none;
+    transition: background 0.2s;
+    z-index: 2147483647;
+    position: relative;
+}
+.captcha-solver:hover {
+    background: #45a049;
+}
+.captcha-solver:active {
+    background: #3d8b40;
+}

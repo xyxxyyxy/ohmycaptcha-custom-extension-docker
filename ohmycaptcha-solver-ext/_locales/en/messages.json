@@ -1,0 +1,11 @@
+{
+  "extName": {
+    "message": "OhMyCaptcha Solver"
+  },
+  "extShortName": {
+    "message": "OhMyCaptcha"
+  },
+  "extDescription": {
+    "message": "Self-hosted CAPTCHA solver using OhMyCaptcha + local vision model"
+  }
+}
