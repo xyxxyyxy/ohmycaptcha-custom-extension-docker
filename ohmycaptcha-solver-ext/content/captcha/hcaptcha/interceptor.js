@@ -1,59 +1,110 @@
 (() => {
 
- let hCaptchaInstance;
+    let hCaptchaInstance;
+    let interceptorReady = false;
+    let nextWidgetId = 0;
 
- let nextWidgetId = 0;
+    function setupInterceptor() {
+        if (interceptorReady) return;
+        interceptorReady = true;
 
- Object.defineProperty(window, "hcaptcha", {
- get: function () {
- return hCaptchaInstance;
- },
- set: function (e) {
- hCaptchaInstance = e;
+        Object.defineProperty(window, "hcaptcha", {
+            configurable: true,
+            get: function () {
+                return hCaptchaInstance;
+            },
+            set: function (e) {
+                hCaptchaInstance = e;
+                patchHCaptcha(e);
+            },
+        });
 
- let originalRenderFunc = e.render;
+        // If hcaptcha already exists, patch it immediately
+        if (window.hcaptcha && window.hcaptcha !== hCaptchaInstance) {
+            hCaptchaInstance = window.hcaptcha;
+            patchHCaptcha(window.hcaptcha);
+        }
+    }
 
- hCaptchaInstance.render = function (container, opts) {
- createHCaptchaWidget(container, opts);
- return originalRenderFunc(container, opts);
- };
+    function patchHCaptcha(obj) {
+        if (!obj) return;
 
- hcaptcha.getResponse = () => document.querySelector('[name=h-captcha-response]').value;
- if (grecaptcha) grecaptcha.getResponse = () => document.querySelector('[name=h-captcha-response]').value;
- },
- });
+        let originalRenderFunc = obj.render;
 
- let createHCaptchaWidget = function (container, opts) {
- if (typeof container !== 'string') {
- if (!container.id) {
- container.id = "hcaptcha-container-" + Date.now();
- }
+        if (originalRenderFunc) {
+            obj.render = function (container, opts) {
+                createHCaptchaWidget(container, opts);
+                return originalRenderFunc(container, opts);
+            };
+        }
 
- container = container.id;
- }
+        // Patch getResponse if available
+        if (obj.getResponse) {
+            let origGetResponse = obj.getResponse;
+            obj.getResponse = function(id) {
+                let val = origGetResponse(id);
+                if (val && val.length > 20) {
+                    // Token found — notify any waiting buttons
+                    let btn = document.querySelector('.captcha-solver[data-captcha-type="hcaptcha"]');
+                    if (btn) btn.dataset.response = val;
+                }
+                return val;
+            };
+        }
 
- if (opts.callback !== undefined && typeof opts.callback === "function") {
- let key = "hcaptchaCallback" + Date.now();
- window[key] = opts.callback;
- opts.callback = key;
- }
+        // Alias grecaptcha.getResponse for compatibility
+        if (window.grecaptcha && !window.grecaptcha.getResponse) {
+            window.grecaptcha.getResponse = function() {
+                let ta = document.querySelector('[name=h-captcha-response]');
+                return ta ? ta.value : '';
+            };
+        }
+    }
 
- let widgetInfo = {
- captchaType: "hcaptcha",
- widgetId: nextWidgetId++,
- containerId: container,
- sitekey: opts.sitekey,
- callback: opts.callback,
- };
+    let createHCaptchaWidget = function (container, opts) {
+        if (!opts) opts = {};
 
- let iter = 0;
- const intId = setInterval(() => {
- if (++iter > 200) clearInterval(intId);
- if (window.registerCaptchaWidget) {
- clearInterval(intId);
- registerCaptchaWidget(widgetInfo);
- }
- }, 500)
- }
+        if (typeof container !== 'string') {
+            if (!container) return;
+            if (!container.id) {
+                container.id = "hcaptcha-container-" + Date.now();
+            }
+            container = container.id;
+        }
+
+        let callback = opts.callback;
+        if (callback !== undefined && typeof callback === "function") {
+            let key = "hcaptchaCallback" + Date.now();
+            window[key] = callback;
+            callback = key;
+        }
+
+        let widgetInfo = {
+            captchaType: "hcaptcha",
+            widgetId: nextWidgetId++,
+            containerId: container,
+            sitekey: opts.sitekey || null,
+            callback: callback,
+        };
+
+        let iter = 0;
+        const intId = setInterval(() => {
+            if (++iter > 200) clearInterval(intId);
+            if (typeof registerCaptchaWidget === 'function') {
+                clearInterval(intId);
+                registerCaptchaWidget(widgetInfo);
+            }
+        }, 50);
+    };
+
+    // Wait for core helpers before setting up interceptor
+    let iter = 0;
+    const checkReady = setInterval(() => {
+        if (++iter > 200) { clearInterval(checkReady); setupInterceptor(); }
+        if (typeof registerCaptchaWidget === 'function') {
+            clearInterval(checkReady);
+            setupInterceptor();
+        }
+    }, 50);
 
 })()

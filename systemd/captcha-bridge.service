@@ -6,8 +6,9 @@ Requires=brave-cdp.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/docker compose -f %h/docker/captcha-solver/docker-compose.yml up -d --build captcha-bridge
-ExecStop=/usr/bin/docker compose -f %h/docker/captcha-solver/docker-compose.yml down captcha-bridge
+WorkingDirectory=%h/docker/captcha-solver
+ExecStart=/usr/bin/docker compose up -d --build captcha-bridge
+ExecStop=/usr/bin/docker compose down captcha-bridge
 
 [Install]
 WantedBy=default.target

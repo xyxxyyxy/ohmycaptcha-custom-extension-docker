@@ -1,7 +1,4 @@
-fastapi>=0.100.0
-uvicorn[standard]
-httpx
-python-multipart
-pillow
-playwright
-pydantic
+# OhMyCaptcha dependencies (auto-installed from its requirements.txt)
+# This file is kept for reference — the Dockerfile installs from ohmycaptcha's requirements.txt
+# The standalone bridge (main_standalone.py) uses:
+#   fastapi uvicorn httpx python-multipart pillow playwright pydantic

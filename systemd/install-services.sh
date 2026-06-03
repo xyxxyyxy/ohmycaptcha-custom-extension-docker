@@ -5,17 +5,24 @@
 set -e
 
 USER=${1:-$SUDO_USER}
+COMPOSE_DIR=${2:-%h/docker/captcha-solver}
+
 if [ -z "$USER" ]; then
-    echo "Usage: sudo ./install-services.sh <username>"
-    echo "Example: sudo ./install-services.sh leonardomoya"
+    echo "Usage: sudo ./install-services.sh <username> [compose-dir]"
+    echo "Example: sudo ./install-services.sh leonardomoya /home/leonardomoya/docker/captcha-solver"
     exit 1
 fi
 
 echo "Installing services for user: $USER"
+echo "Docker compose directory: $COMPOSE_DIR"
+
+# Create compose dir if it doesn't exist
+REAL_COMPOSE_DIR=$(echo "$COMPOSE_DIR" | sed "s|%h|/home/$USER|")
+mkdir -p "$REAL_COMPOSE_DIR"
 
 # Copy services to systemd
-sudo cp brave-cdp.service /etc/systemd/system/brave-cdp@$USER.service
-sudo cp captcha-bridge.service /etc/systemd/system/captcha-bridge@$USER.service
+sed "s|%h/docker/captcha-solver|$COMPOSE_DIR|g" brave-cdp.service > /etc/systemd/system/brave-cdp@$USER.service
+sed "s|%h/docker/captcha-solver|$COMPOSE_DIR|g" captcha-bridge.service > /etc/systemd/system/captcha-bridge@$USER.service
 
 # Reload systemd
 sudo systemctl daemon-reload

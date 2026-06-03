@@ -16,13 +16,22 @@ services:
     ports:
       - "1231:8000"
     environment:
-      - SHIM_URL=http://captcha-solver:8000
-      - CDP_URL=http://host.docker.internal:9222
+      # OhMyCaptcha config
       - CLIENT_KEY=local
       - CAPTCHA_RETRIES=3
       - CAPTCHA_TIMEOUT=60
       - BROWSER_HEADLESS=false
       - BROWSER_TIMEOUT=30
+      # CDP: connect to Brave on host instead of launching headless
+      - CDP_URL=http://host.docker.internal:9222
+      # Cloud model (OpenAI-compatible) — not used when local is set
+      - CLOUD_BASE_URL=http://captcha-solver:8000/v1
+      - CLOUD_API_KEY=sk-local
+      - CLOUD_MODEL=Qwen3VL-8B-Instruct-Q8_0
+      # Local model (self-hosted vision) — used for image tasks
+      - LOCAL_BASE_URL=http://captcha-solver:8000/v1
+      - LOCAL_API_KEY=sk-local
+      - LOCAL_MODEL=Qwen3VL-8B-Instruct-Q8_0
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
