@@ -113,6 +113,14 @@ function buildTask(params) {
                 pageAction: params.action || ""
             };
         }
+        // Explicit image-classification request (e.g. user clicked "solve images")
+        if (params.imageClassification) {
+            return {
+                type: "ReCaptchaV2Classification",
+                websiteURL: params.url,
+                websiteKey: params.sitekey
+            };
+        }
         if (params.invisible || params.version === "v2_invisible") {
             return {
                 type: "RecaptchaV2TaskProxyless",
