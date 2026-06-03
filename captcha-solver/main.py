@@ -209,6 +209,45 @@ async def _unload_model():
     except:
         pass
 
+# ── OpenAI-compatible proxy endpoints (needed by OhMyCaptcha) ──
+
+@app.get("/v1/models")
+async def list_models():
+    """Proxy to llama.cpp /models endpoint."""
+    try:
+        r = await http_client.get(f"{LLAMACPP_URL}/models")
+        return r.json() if r.status_code == 200 else {"data": [{"id": VISION_MODEL}]}
+    except Exception:
+        return {"data": [{"id": VISION_MODEL, "object": "model"}]}
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(body: dict):
+    """Proxy chat completions to llama.cpp.
+    OhMyCaptcha's reCAPTCHA v2 solver uses this for audio transcription."""
+    target_model = body.get("model", VISION_MODEL)
+
+    # Ensure vision model is loaded for audio transcription too
+    load_result = await _ensure_model_loaded(target_model)
+    if not load_result.get("success"):
+        raise HTTPException(status_code=502, detail=f"Model load failed: {load_result.get('error')}")
+
+    # Forward request to llama.cpp
+    try:
+        r = await http_client.post(
+            f"{LLAMACPP_URL}/v1/chat/completions",
+            json=body,
+            timeout=300.0
+        )
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"llama.cpp error: {e}")
+    finally:
+        if UNLOAD_AFTER_SOLVE:
+            await _unload_model()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

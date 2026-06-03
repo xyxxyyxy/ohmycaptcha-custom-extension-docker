@@ -1,50 +1,89 @@
-(() => {
+(function() {
+    "use strict";
 
-    let hCaptchaInstance;
+    const LOG = "[OMC:hcap-interceptor]";
+    console.log(LOG, "Loading hCaptcha interceptor...");
+
+    let hCaptchaInstance = undefined;
     let interceptorReady = false;
     let nextWidgetId = 0;
 
     function setupInterceptor() {
-        if (interceptorReady) return;
+        if (interceptorReady) {
+            console.log(LOG, "Interceptor already set up");
+            return;
+        }
+
+        console.log(LOG, "Setting up hcaptcha property interceptor...");
         interceptorReady = true;
 
-        Object.defineProperty(window, "hcaptcha", {
-            configurable: true,
-            get: function () {
-                return hCaptchaInstance;
-            },
-            set: function (e) {
-                hCaptchaInstance = e;
-                patchHCaptcha(e);
-            },
-        });
+        try {
+            Object.defineProperty(window, "hcaptcha", {
+                configurable: true,
+                get: function () {
+                    return hCaptchaInstance;
+                },
+                set: function (e) {
+                    console.log(LOG, "hcaptcha SET fired");
+                    hCaptchaInstance = e;
+                    try {
+                        patchHCaptcha(e);
+                    } catch (err) {
+                        console.error(LOG, "Error in hcaptcha setter:", err);
+                    }
+                },
+            });
+            console.log(LOG, "Property descriptor installed on window.hcaptcha");
+        } catch (err) {
+            console.error(LOG, "Failed to install property interceptor:", err);
+            return;
+        }
 
-        // If hcaptcha already exists, patch it immediately
-        if (window.hcaptcha && window.hcaptcha !== hCaptchaInstance) {
+        // If hcaptcha already exists
+        if (typeof window.hcaptcha !== 'undefined' && window.hcaptcha !== hCaptchaInstance) {
+            console.log(LOG, "hcaptcha already exists! Patching immediately...");
             hCaptchaInstance = window.hcaptcha;
             patchHCaptcha(window.hcaptcha);
+        } else {
+            console.log(LOG, "hcaptcha not yet present. Waiting...");
         }
     }
 
     function patchHCaptcha(obj) {
-        if (!obj) return;
+        if (!obj) {
+            console.warn(LOG, "patchHCaptcha called with null object");
+            return;
+        }
+        console.log(LOG, "Patching hcaptcha object. Has render:", !!obj.render, "Has execute:", !!obj.execute);
 
-        let originalRenderFunc = obj.render;
-
-        if (originalRenderFunc) {
+        // Intercept render()
+        if (obj.render) {
+            let originalRenderFunc = obj.render;
             obj.render = function (container, opts) {
-                createHCaptchaWidget(container, opts);
+                console.log(LOG, "hcaptcha.render() intercepted");
+                let widgetInfo = createHCaptchaWidgetInfo(container, opts);
+                if (widgetInfo) {
+                    let iter = 0;
+                    const intId = setInterval(function() {
+                        if (++iter > 200) { clearInterval(intId); return; }
+                        if (typeof registerCaptchaWidget === 'function') {
+                            clearInterval(intId);
+                            registerCaptchaWidget(widgetInfo);
+                            console.log(LOG, "hCaptcha widget registered from render():", widgetInfo.containerId);
+                        }
+                    }, 50);
+                }
                 return originalRenderFunc(container, opts);
             };
+            console.log(LOG, "render() patched");
         }
 
-        // Patch getResponse if available
+        // Patch getResponse
         if (obj.getResponse) {
             let origGetResponse = obj.getResponse;
             obj.getResponse = function(id) {
                 let val = origGetResponse(id);
                 if (val && val.length > 20) {
-                    // Token found — notify any waiting buttons
                     let btn = document.querySelector('.captcha-solver[data-captcha-type="hcaptcha"]');
                     if (btn) btn.dataset.response = val;
                 }
@@ -53,19 +92,21 @@
         }
 
         // Alias grecaptcha.getResponse for compatibility
-        if (window.grecaptcha && !window.grecaptcha.getResponse) {
-            window.grecaptcha.getResponse = function() {
-                let ta = document.querySelector('[name=h-captcha-response]');
-                return ta ? ta.value : '';
-            };
-        }
+        try {
+            if (window.grecaptcha && !window.grecaptcha.getResponse) {
+                window.grecaptcha.getResponse = function() {
+                    let ta = document.querySelector('[name=h-captcha-response]');
+                    return ta ? ta.value : '';
+                };
+            }
+        } catch(e) {}
     }
 
-    let createHCaptchaWidget = function (container, opts) {
+    function createHCaptchaWidgetInfo(container, opts) {
         if (!opts) opts = {};
 
         if (typeof container !== 'string') {
-            if (!container) return;
+            if (!container) return null;
             if (!container.id) {
                 container.id = "hcaptcha-container-" + Date.now();
             }
@@ -79,32 +120,29 @@
             callback = key;
         }
 
-        let widgetInfo = {
+        return {
             captchaType: "hcaptcha",
             widgetId: nextWidgetId++,
             containerId: container,
             sitekey: opts.sitekey || null,
             callback: callback,
         };
+    }
 
-        let iter = 0;
-        const intId = setInterval(() => {
-            if (++iter > 200) clearInterval(intId);
-            if (typeof registerCaptchaWidget === 'function') {
-                clearInterval(intId);
-                registerCaptchaWidget(widgetInfo);
-            }
-        }, 50);
-    };
-
-    // Wait for core helpers before setting up interceptor
+    // Wait for core helpers
     let iter = 0;
-    const checkReady = setInterval(() => {
-        if (++iter > 200) { clearInterval(checkReady); setupInterceptor(); }
+    const checkReady = setInterval(function() {
+        if (++iter > 200) {
+            clearInterval(checkReady);
+            console.warn(LOG, "Timeout waiting for registerCaptchaWidget, forcing setup");
+            setupInterceptor();
+            return;
+        }
         if (typeof registerCaptchaWidget === 'function') {
             clearInterval(checkReady);
+            console.log(LOG, "registerCaptchaWidget ready, setting up interceptor");
             setupInterceptor();
         }
     }, 50);
 
-})()
+})();

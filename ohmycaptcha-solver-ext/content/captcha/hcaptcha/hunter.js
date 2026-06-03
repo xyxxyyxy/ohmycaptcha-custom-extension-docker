@@ -1,10 +1,18 @@
-(() => {
+(function() {
+    "use strict";
 
-    let foundWidgets = new Set();
-    let nextWidgetId = 100; // Start high to avoid collision with interceptor
+    const LOG = "[OMC:hcap-hunter]";
+    console.log(LOG, "Loading hCaptcha hunter...");
+
+    let foundContainers = new Set();
+    let nextWidgetId = 1000;
+    let scanCount = 0;
 
     function findHCaptchaWidgets() {
-        // Method 1: Look for h-capcha-response textarea
+        scanCount++;
+        let newFound = 0;
+
+        // Method 1: Look for h-captcha-response textarea
         let textareas = document.querySelectorAll('textarea[name="h-captcha-response"]');
         textareas.forEach(function(textarea) {
             let container = textarea.closest('.h-captcha, [data-sitekey], .hcaptcha');
@@ -18,19 +26,23 @@
                 container.id = containerId;
             }
 
-            // Skip if already registered
-            if (foundWidgets.has(containerId)) return;
-            if (isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
+            if (foundContainers.has(containerId)) return;
+            if (typeof isCaptchaWidgetRegistered === 'function' &&
+                isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
 
-            foundWidgets.add(containerId);
+            foundContainers.add(containerId);
 
-            registerCaptchaWidget({
-                captchaType: "hcaptcha",
-                widgetId: nextWidgetId++,
-                containerId: containerId,
-                sitekey: sitekey,
-                callback: container.dataset.callback || null,
-            });
+            if (typeof registerCaptchaWidget === 'function') {
+                registerCaptchaWidget({
+                    captchaType: "hcaptcha",
+                    widgetId: nextWidgetId++,
+                    containerId: containerId,
+                    sitekey: sitekey,
+                    callback: container.dataset.callback || null,
+                });
+                console.log(LOG, "Method 1 (textarea): Found widget", containerId, "sitekey:", sitekey);
+                newFound++;
+            }
         });
 
         // Method 2: Look for iframe with hcaptcha.com
@@ -47,25 +59,30 @@
                 container.id = containerId;
             }
 
-            if (foundWidgets.has(containerId)) return;
-            if (isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
+            if (foundContainers.has(containerId)) return;
+            if (typeof isCaptchaWidgetRegistered === 'function' &&
+                isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
 
-            foundWidgets.add(containerId);
+            foundContainers.add(containerId);
 
-            registerCaptchaWidget({
-                captchaType: "hcaptcha",
-                widgetId: nextWidgetId++,
-                containerId: containerId,
-                sitekey: sitekey,
-                callback: null,
-            });
+            if (typeof registerCaptchaWidget === 'function') {
+                registerCaptchaWidget({
+                    captchaType: "hcaptcha",
+                    widgetId: nextWidgetId++,
+                    containerId: containerId,
+                    sitekey: sitekey,
+                    callback: null,
+                });
+                console.log(LOG, "Method 2 (iframe): Found widget", containerId, "sitekey:", sitekey);
+                newFound++;
+            }
         });
 
-        // Method 3: Look for elements with data-sitekey that look like hCaptcha
+        // Method 3: Look for elements with data-sitekey
         let candidates = document.querySelectorAll('[data-sitekey]');
         candidates.forEach(function(el) {
-            // Skip if inside a reCAPTCHA widget
-            if (el.closest('.g-recaptcha, .recaptcha')) return;
+            // Skip reCAPTCHA widgets
+            if (el.closest('.g-recaptcha, #recaptcha, .recaptcha')) return;
 
             let containerId = el.id;
             if (!containerId) {
@@ -73,34 +90,58 @@
                 el.id = containerId;
             }
 
-            if (foundWidgets.has(containerId)) return;
-            if (isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
+            if (foundContainers.has(containerId)) return;
+            if (typeof isCaptchaWidgetRegistered === 'function' &&
+                isCaptchaWidgetRegistered("hcaptcha", containerId)) return;
 
-            // Must have an iframe from hcaptcha.com to be sure
-            let hcaptchaIframe = el.querySelector('iframe[src*="hcaptcha.com"]');
-            if (!hcaptchaIframe && !el.closest('iframe[src*="hcaptcha.com"]')) return;
+            let sitekey = el.dataset.sitekey;
+            // Verify: must have hcaptcha iframe inside or nearby
+            let hasHcaptcha = el.querySelector('iframe[src*="hcaptcha.com"]') !== null ||
+                              el.closest('iframe[src*="hcaptcha.com"]') !== null;
+            if (!hasHcaptcha) {
+                // Check siblings
+                let parent = el.parentElement;
+                if (parent && parent.querySelector('iframe[src*="hcaptcha.com"]')) {
+                    hasHcaptcha = true;
+                }
+            }
+            if (!hasHcaptcha) return;
 
-            foundWidgets.add(containerId);
+            foundContainers.add(containerId);
 
-            registerCaptchaWidget({
-                captchaType: "hcaptcha",
-                widgetId: nextWidgetId++,
-                containerId: containerId,
-                sitekey: el.dataset.sitekey,
-                callback: el.dataset.callback || null,
-            });
+            if (typeof registerCaptchaWidget === 'function') {
+                registerCaptchaWidget({
+                    captchaType: "hcaptcha",
+                    widgetId: nextWidgetId++,
+                    containerId: containerId,
+                    sitekey: sitekey,
+                    callback: el.dataset.callback || null,
+                });
+                console.log(LOG, "Method 3 (data-sitekey): Found widget", containerId, "sitekey:", sitekey);
+                newFound++;
+            }
         });
+
+        if (newFound > 0) {
+            console.log(LOG, "Scan #" + scanCount + ": Found", newFound, "new hCaptcha widget(s)");
+        } else if (scanCount <= 3) {
+            console.log(LOG, "Scan #" + scanCount + ": No hCaptcha widgets found yet");
+        }
     }
 
     // Wait for core helpers, then start scanning
     let iter = 0;
-    const checkReady = setInterval(() => {
-        if (++iter > 200) { clearInterval(checkReady); }
+    const checkReady = setInterval(function() {
+        if (++iter > 200) {
+            clearInterval(checkReady);
+            console.warn(LOG, "Timeout waiting for registerCaptchaWidget");
+        }
         if (typeof registerCaptchaWidget === 'function') {
             clearInterval(checkReady);
+            console.log(LOG, "Ready. Starting hCaptcha scan loop.");
             findHCaptchaWidgets();
             setInterval(findHCaptchaWidgets, 2000);
         }
     }, 50);
 
-})()
+})();

@@ -1,49 +1,65 @@
-CaptchaProcessors.register({
+(function() {
+    "use strict";
 
- captchaType: "hcaptcha",
+    function register() {
+        if (typeof CaptchaProcessors === 'undefined' || !CaptchaProcessors.register) {
+            console.log("[OMC:hcap-proc] Waiting for CaptchaProcessors...");
+            setTimeout(register, 100);
+            return;
+        }
 
- canBeProcessed: function(widget, config) {
- if (!config.enabledForHCaptcha) return false;
+        CaptchaProcessors.register({
+            captchaType: "hcaptcha",
 
- if (!("#" + widget.containerId).length) return false;
+            canBeProcessed: function(widget, config) {
+                if (!config) return false;
+                if (!config.enabledForHCaptcha) return false;
+                if (!("#" + widget.containerId).length) return false;
+                if (!widget.sitekey) return false;
+                return true;
+            },
 
- if (!widget.sitekey) return false;
+            attachButton: function(widget, config, button) {
+                let container = $("#" + widget.containerId);
+                let iframe = container.find('iframe');
+                if (iframe.length) {
+                    button.css({ width: iframe.outerWidth() + "px" });
+                }
+                container.append(button);
 
- return true;
- },
+                if (config.autoSolveHCaptcha) button.click();
+            },
 
- attachButton: function(widget, config, button) {
- let container = $("#" + widget.containerId);
+            getParams: function(widget, config) {
+                return {
+                    url: location.href,
+                    sitekey: widget.sitekey,
+                };
+            },
 
- button.css({
- width: container.find('iframe').outerWidth() + "px"
- });
+            onSolved: function(widget, answer) {
+                let container = $("#" + widget.containerId);
+                container.find("textarea").val(answer);
+                container.find("iframe").attr("data-hcaptcha-response", answer);
 
- container.append(button);
+                // Trigger callback if available
+                let callback = widget.callback;
+                if (callback && typeof window[callback] === 'function') {
+                    try { window[callback](answer); } catch(e) {}
+                }
+            },
 
- if (config.autoSolveHCaptcha) button.click();
- },
+            getForm: function(widget) {
+                return $("#" + widget.containerId).closest("form");
+            },
 
- getParams: function(widget, config) {
- return {
- url: location.href,
- sitekey: widget.sitekey,
- };
- },
+            getCallback: function(widget) {
+                return widget.callback;
+            },
+        });
 
- onSolved: function(widget, answer) {
- let container = $("#" + widget.containerId);
+        console.log("[OMC:hcap-proc] hCaptcha processor registered");
+    }
 
- container.find("textarea").val(answer);
- container.find("iframe").attr("data-hcaptcha-response", answer);
- },
-
- getForm: function(widget) {
- return $("#" + widget.containerId).closest("form");
- },
-
- getCallback: function(widget) {
- return widget.callback;
- },
-
-});
+    register();
+})();

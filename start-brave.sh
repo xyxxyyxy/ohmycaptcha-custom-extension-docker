@@ -79,6 +79,7 @@ echo "Using: $BRAVE_BIN"
 "$BRAVE_BIN" \
     --user-data-dir="$BRAVE_PROFILE" \
     --remote-debugging-port=9222 \
+    --remote-debugging-address=0.0.0.0 \
     --no-first-run \
     --no-default-browser-check \
     --disable-blink-features=AutomationControlled \
@@ -89,7 +90,9 @@ echo "Using: $BRAVE_BIN"
 BRAVE_PID=$!
 echo "Brave PID: $BRAVE_PID"
 echo ""
-echo "Test CDP: curl http://localhost:9222/json/version"
+echo "Test CDP from host:  curl http://localhost:9222/json/version"
+echo "Test CDP from Docker: curl http://host.docker.internal:9222/json/version"
+echo "If Docker test fails, ensure --remote-debugging-address=0.0.0.0 is set"
 echo ""
 
 wait $BRAVE_PID

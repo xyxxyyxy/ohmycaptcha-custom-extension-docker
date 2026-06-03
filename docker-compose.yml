@@ -13,30 +13,33 @@ services:
   captcha-bridge:
     build: ./captcha-bridge
     container_name: captcha-bridge
-    ports:
-      - "1231:8000"
+    # Note: ports: mapping is ignored with network_mode: host
+    # The app binds directly to port 1231 on the host
     environment:
       # OhMyCaptcha config
       - CLIENT_KEY=local
+      - SERVER_PORT=1231
       - CAPTCHA_RETRIES=3
       - CAPTCHA_TIMEOUT=60
       - BROWSER_HEADLESS=false
       - BROWSER_TIMEOUT=30
-      # CDP: connect to Brave on host instead of launching headless
-      - CDP_URL=http://host.docker.internal:9222
-      # Cloud model (OpenAI-compatible) — not used when local is set
-      - CLOUD_BASE_URL=http://captcha-solver:8000/v1
+      # CDP: network_mode: host, so localhost IS the host's localhost
+      - CDP_URL=http://localhost:9222
+      # Shim: network_mode: host, use host-mapped port 1232
+      - SHIM_URL=http://localhost:1232
+      # Cloud model (OpenAI-compatible)
+      - CLOUD_BASE_URL=http://localhost:1232/v1
       - CLOUD_API_KEY=sk-local
       - CLOUD_MODEL=Qwen3VL-8B-Instruct-Q8_0
-      # Local model (self-hosted vision) — used for image tasks
-      - LOCAL_BASE_URL=http://captcha-solver:8000/v1
+      # Local model (self-hosted vision)
+      - LOCAL_BASE_URL=http://localhost:1232/v1
       - LOCAL_API_KEY=sk-local
       - LOCAL_MODEL=Qwen3VL-8B-Instruct-Q8_0
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Use host network so localhost:9222 in container = host localhost:9222
+    network_mode: host
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:1231/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3

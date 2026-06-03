@@ -3,7 +3,7 @@ var Config = {
     default: {
         isPluginEnabled: true,
         apiKey: "local",
-        apiUrl: "http://localhost:1231",
+        apiUrl: "http://192.168.3.25:1231",
         valute: "USD",
         email: null,
         autoSubmitForms: false,

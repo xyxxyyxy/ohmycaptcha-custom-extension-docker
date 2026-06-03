@@ -47,15 +47,17 @@
         "common/config.js",
         "content/core_helpers.js",
         "content/script.js",
+        "content/captcha/recaptcha/processor.js",
         "content/captcha/recaptcha/interceptor.js",
         "content/captcha/recaptcha/hunter.js",
+        "content/captcha/hcaptcha/processor.js",
         "content/captcha/hcaptcha/interceptor.js",
         "content/captcha/hcaptcha/hunter.js",
-        "content/captcha/normal/hunter.js",
         "content/captcha/normal/processor.js",
+        "content/captcha/normal/hunter.js",
+        "content/captcha/turnstile/processor.js",
         "content/captcha/turnstile/interceptor.js",
-        "content/captcha/turnstile/hunter.js",
-        "content/captcha/turnstile/processor.js"
+        "content/captcha/turnstile/hunter.js"
       ]
     }
   ],
