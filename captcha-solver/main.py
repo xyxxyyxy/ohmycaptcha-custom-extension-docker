@@ -5,6 +5,8 @@ import httpx
 from PIL import Image
 import io
 
+from fallback import FallbackHandler
+
 # ── Logging setup ──
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +34,7 @@ log.info("VISION_MODEL=%s", VISION_MODEL)
 log.info("UNLOAD_AFTER_SOLVE=%s", UNLOAD_AFTER_SOLVE)
 
 http_client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
+fallback = FallbackHandler()
 
 @app.get("/health")
 async def health():
@@ -363,22 +366,19 @@ async def chat_completions(body: dict):
     # Check for oversized images in the payload and resize them
     body = _resize_images_in_payload(body)
 
-    log.info("[/v1/chat/completions] Forwarding to llama.cpp...")
+    log.info("[/v1/chat/completions] Forwarding to llama.cpp with fallback...")
     try:
-        r = await http_client.post(
-            f"{LLAMACPP_URL}/v1/chat/completions",
-            json=body,
-            timeout=300.0
-        )
-        log.info("[/v1/chat/completions] llama.cpp response: %d", r.status_code)
-        if r.status_code != 200:
-            err_text = r.text[:500]
-            log.error("[/v1/chat/completions] llama.cpp error body: %s", err_text)
-        r.raise_for_status()
-        return r.json()
-    except httpx.HTTPError as e:
-        log.error("[/v1/chat/completions] HTTP error: %s", e)
-        raise HTTPException(status_code=502, detail=f"llama.cpp error: {e}")
+        # Use fallback handler: tries self-hosted first, then OpenRouter
+        result = await fallback.chat_completions(body)
+        log.info("[/v1/chat/completions] SUCCESS via %s",
+                 "fallback" if fallback.get_stats()["fallback_count"] > 0 else "self-hosted")
+        return result
+    except RuntimeError as e:
+        log.error("[/v1/chat/completions] All tiers failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"All AI tiers failed: {e}")
+    except Exception as e:
+        log.error("[/v1/chat/completions] Unexpected error: %s", e)
+        raise HTTPException(status_code=502, detail=f"Inference error: {e}")
     finally:
         if UNLOAD_AFTER_SOLVE:
             await _unload_model()
@@ -425,25 +425,36 @@ async def audio_transcription(
     language: str = Form("en"),
     prompt: str = Form("Transcribe the spoken digits. Reply with digits only, separated by spaces.")
 ):
-    """Proxy audio transcription to whisperfile.
+    """Transcribe audio: tries whisperfile first, falls back to OpenRouter.
     OhMyCaptcha's reCAPTCHA v2 solver calls this for audio challenge transcription."""
     contents = await file.read()
     log.info("[/v1/audio/transcriptions] Received: %d bytes, model=%s, lang=%s", len(contents), model, language)
+
     try:
-        r = await http_client.post(
-            f"{WHISPER_URL}/v1/audio/transcriptions",
-            files={"file": (file.filename, contents, file.content_type or "audio/mpeg")},
-            data={"model": model, "language": language},
-            timeout=60.0
-        )
-        log.info("[/v1/audio/transcriptions] Whisper response: %d", r.status_code)
-        r.raise_for_status()
-        result = r.json()
+        result = await fallback.audio_transcriptions(contents, file.filename, language)
         log.info("[/v1/audio/transcriptions] Transcript: %s", result.get("text", "")[:100])
         return result
-    except httpx.HTTPError as e:
-        log.error("[/v1/audio/transcriptions] Whisper error: %s", e)
-        raise HTTPException(status_code=502, detail=f"Whisperfile error: {e}")
+    except RuntimeError as e:
+        log.error("[/v1/audio/transcriptions] All tiers failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Audio transcription failed: {e}")
+    except Exception as e:
+        log.error("[/v1/audio/transcriptions] Error: %s", e)
+        raise HTTPException(status_code=502, detail=f"Transcription error: {e}")
+
+@app.get("/stats")
+async def get_stats():
+    """Show fallback usage statistics."""
+    stats = fallback.get_stats()
+    return {
+        **stats,
+        "llamacpp_url": LLAMACPP_URL,
+        "whisper_url": WHISPER_URL,
+        "openrouter_configured": bool(os.getenv("OPENROUTER_API_KEY")),
+        "fallback_enabled": os.getenv("FALLBACK_ENABLED", "true").lower() in ("1", "true", "yes"),
+        "vision_model": VISION_MODEL,
+        "fallback_vision_model": os.getenv("FALLBACK_VISION_MODEL", "meta-llama/llama-4-maverick:free"),
+    }
+
 
 @app.get("/v1/audio/transcriptions")
 async def audio_transcription_info():

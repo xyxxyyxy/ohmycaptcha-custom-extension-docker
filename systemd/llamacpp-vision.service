@@ -1,0 +1,47 @@
+[Unit]
+Description=llama.cpp dedicated vision server (Qwen3VL for CAPTCHA solving)
+After=network.target
+
+# IMPORTANT: This is a SEPARATE llama.cpp instance from your main one.
+# It runs on port 6663 and serves ONLY Qwen3VL for vision tasks.
+# Your main llama.cpp (port 8080) can run any other model.
+#
+# Sizing for AMD RX 6600 (8GB VRAM):
+#   - Qwen3VL-8B-Instruct-Q4_K_M.gguf  ~5.2GB
+#   - mmproj-Qwen3VL-8B-Instruct-F16   ~2.0GB
+#   - KV cache + overhead              ~0.5GB
+#   Total: ~7.7GB (fits in 8GB)
+#
+# If you get OOM errors, reduce --ctx-size from 4096 to 2048.
+#
+# ROCm/HIP note: llama.cpp must be built with -DGGML_HIP=ON
+# For gfx1032 (RX 6600), you may need: HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+[Service]
+Type=simple
+# Environment for ROCm gfx1032 support (RX 6600)
+Environment="HSA_OVERRIDE_GFX_VERSION=10.3.0"
+Environment="HIP_VISIBLE_DEVICES=1"
+
+ExecStart=/mnt/hdd/llama.cpp/build/bin/llama-server \
+    -m /mnt/hdd/ai-models/Qwen3VL-8B-Instruct-Q4_K_M.gguf \
+    --mmproj /mnt/hdd/ai-models/mmproj-Qwen3VL-8B-Instruct-F16.gguf \
+    -ngl 99 \
+    --port 6663 \
+    --host 0.0.0.0 \
+    --ctx-size 4096 \
+    --batch-size 512 \
+    --ubatch-size 128 \
+    -fa \
+    --timeout 300 \
+    --metrics
+
+WorkingDirectory=/mnt/hdd/llama.cpp/build/bin
+Restart=on-failure
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

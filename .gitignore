@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.tar.gz
+
+# OhMyCaptcha vendored source - only keep essential files
+captcha-bridge/omc_src/docs/
+captcha-bridge/omc_src/tests/
+captcha-bridge/omc_src/skills/
+captcha-bridge/omc_src/.github/
+captcha-bridge/omc_src/*.md
+captcha-bridge/omc_src/mkdocs.yml
+captcha-bridge/omc_src/render.yaml
+captcha-bridge/omc_src/pyrightconfig.json
+captcha-bridge/omc_src/Dockerfile.render
+captcha-bridge/omc_src/CONTRIBUTING.md
+captcha-bridge/omc_src/SECURITY.md
+captcha-bridge/omc_src/DISCLAIMER*
+captcha-bridge/omc_src/LICENSE
+captcha-bridge/omc_src/.gitignore
+captcha-bridge/omc_src/typings/
+

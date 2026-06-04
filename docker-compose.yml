@@ -1,15 +1,57 @@
 services:
+  # ── Local Vision Server (llama.cpp + Qwen3VL on RX 6600) ──
+  llamacpp-vision:
+    build: ./llamacpp-vision
+    container_name: llamacpp-vision
+    ports:
+      - "6663:6663"
+    volumes:
+      # Mount your model directory from host
+      - /mnt/hdd/ai-models:/models:ro
+    devices:
+      # ROCm GPU access (AMD RX 6600)
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    environment:
+      - HSA_OVERRIDE_GFX_VERSION=10.3.0
+      - HIP_VISIBLE_DEVICES=0
+      # If OOM with 4096, reduce to 2048
+      # - CTX_SIZE=2048
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6663/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   captcha-solver:
     build: ./captcha-solver
     container_name: captcha-solver
     ports:
       - "1232:8000"
+    depends_on:
+      llamacpp-vision:
+        condition: service_healthy
     environment:
-      - LLAMACPP_URL=https://llamacpp.xyxxyyxy.dev
-      - VISION_MODEL=Qwen3VL-8B-Instruct-Q8_0
+      # Docker service name as hostname (containers share default bridge network)
+      # llamacpp-vision container serves Qwen3VL on port 6663
+      - LLAMACPP_URL=http://llamacpp-vision:6663
+      - VISION_MODEL=Qwen3VL-8B-Instruct-Q4_K_M
       - UNLOAD_AFTER_SOLVE=false
       # Whisper audio transcription service
       - WHISPER_URL=http://whisper:1233
+      # OpenRouter fallback (only used if local vision server is down)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - FALLBACK_ENABLED=${FALLBACK_ENABLED:-true}
+      - FALLBACK_VISION_MODEL=meta-llama/llama-4-maverick:free
     restart: unless-stopped
 
   whisper:
@@ -39,11 +81,11 @@ services:
       # Cloud model (OpenAI-compatible)
       - CLOUD_BASE_URL=http://localhost:1232/v1
       - CLOUD_API_KEY=sk-local
-      - CLOUD_MODEL=Qwen3VL-8B-Instruct-Q8_0
-      # Local model (self-hosted vision)
+      - CLOUD_MODEL=Qwen3VL-8B-Instruct-Q4_K_M
+      # Local model (self-hosted vision server on port 6663)
       - LOCAL_BASE_URL=http://localhost:1232/v1
       - LOCAL_API_KEY=sk-local
-      - LOCAL_MODEL=Qwen3VL-8B-Instruct-Q8_0
+      - LOCAL_MODEL=Qwen3VL-8B-Instruct-Q4_K_M
     # Use host network so localhost:9222 in container = host localhost:9222
     network_mode: host
     restart: unless-stopped
