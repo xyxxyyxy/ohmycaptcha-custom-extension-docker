@@ -108,22 +108,28 @@ class RecaptchaV3Solver:
             f"Failed after {self._config.captcha_retries} attempts: {last_error}"
         )
 
+    async def _get_page(self):
+        """Get a page from the default browser context where extensions run."""
+        contexts = self._browser.contexts
+        if contexts:
+            context = contexts[0]
+            pages = context.pages
+            if pages:
+                page = pages[0]
+                await page.set_viewport_size({"width": 1920, "height": 1080})
+                return page, False
+            page = await context.new_page()
+            return page, True
+        else:
+            page = await self._browser.new_page(viewport={"width": 1920, "height": 1080})
+            return page, True
+
     async def _solve_once(
         self, website_url: str, website_key: str, page_action: str
     ) -> str:
         assert self._browser is not None
 
-        context = await self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1920, "height": 1080},
-            locale="en-US",
-        )
-
-        page = await context.new_page()
+        page, should_close = await self._get_page()
         await page.add_init_script(STEALTH_JS)
 
         try:
@@ -160,4 +166,5 @@ class RecaptchaV3Solver:
             )
             return token
         finally:
-            await context.close()
+            if should_close:
+                await page.close()

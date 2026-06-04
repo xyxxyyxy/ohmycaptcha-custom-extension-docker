@@ -1,0 +1,19 @@
+[Unit]
+Description=llama.cpp server (multi-model with vision)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/mnt/hdd/llama.cpp/build/bin/llama-server \
+    --models-dir /mnt/hdd/ai-models \
+    -ngl 99 \
+    --port 8080 \
+    --host 0.0.0.0 \
+    --models-max 1 \
+    --mmproj /mnt/hdd/ai-models/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+WorkingDirectory=/mnt/hdd/llama.cpp/build/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

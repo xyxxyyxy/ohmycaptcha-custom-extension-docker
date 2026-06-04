@@ -8,6 +8,15 @@ services:
       - LLAMACPP_URL=https://llamacpp.xyxxyyxy.dev
       - VISION_MODEL=Qwen3VL-8B-Instruct-Q8_0
       - UNLOAD_AFTER_SOLVE=false
+      # Whisper audio transcription service
+      - WHISPER_URL=http://whisper:1233
+    restart: unless-stopped
+
+  whisper:
+    build: ./whisper
+    container_name: whisper
+    ports:
+      - "1233:1233"
     restart: unless-stopped
 
   captcha-bridge:

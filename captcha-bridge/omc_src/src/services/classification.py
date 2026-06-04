@@ -161,8 +161,15 @@ class ClassificationSolver:
     ) -> dict[str, Any]:
         content: list[dict[str, Any]] = []
 
-        for img_b64 in images:
+        log.info("[Classifier] === START === base_url=%s model=%s images=%d",
+                 self._config.local_base_url, self._config.captcha_multimodal_model, len(images))
+
+        for i, img_b64 in enumerate(images):
             data_url = self._prepare_image(img_b64)
+            # Log image size (base64 length)
+            b64_len = len(data_url) if isinstance(data_url, str) else 0
+            log.info("[Classifier] Image %d: prepared, data_url length=%d (~%d KB)",
+                     i, b64_len, b64_len // 4 // 1024)
             content.append({
                 "type": "image_url",
                 "image_url": {"url": data_url, "detail": "high"},
@@ -170,9 +177,12 @@ class ClassificationSolver:
 
         user_text = question if question else "Classify this captcha image."
         content.append({"type": "text", "text": user_text})
+        log.info("[Classifier] Question: %s", user_text[:100])
 
         last_error: Exception | None = None
         for attempt in range(self._config.captcha_retries):
+            log.info("[Classifier] Attempt %d/%d calling chat.completions...",
+                     attempt + 1, self._config.captcha_retries)
             try:
                 response = await self._client.chat.completions.create(
                     model=self._config.captcha_multimodal_model,
@@ -184,11 +194,30 @@ class ClassificationSolver:
                     ],
                 )
                 raw = response.choices[0].message.content or ""
-                return self._parse_json(raw)
+                log.info("[Classifier] Raw response (first 200 chars): %s", raw[:200])
+                result = self._parse_json(raw)
+                log.info("[Classifier] === SUCCESS === result=%s", result)
+                return result
             except Exception as exc:
                 last_error = exc
-                log.warning("Classification attempt %d failed: %s", attempt + 1, exc)
+                # Try to extract HTTP status code from exception
+                err_str = str(exc)
+                status_code = "unknown"
+                if "502" in err_str:
+                    status_code = "502"
+                elif "500" in err_str:
+                    status_code = "500"
+                elif "404" in err_str:
+                    status_code = "404"
+                elif "401" in err_str:
+                    status_code = "401"
+                log.error("[Classifier] Attempt %d FAILED (HTTP %s): %s",
+                          attempt + 1, status_code, err_str[:300])
+                # Log exception details
+                import traceback
+                log.debug("[Classifier] Full traceback:\n%s", traceback.format_exc())
 
+        log.error("[Classifier] === ALL ATTEMPTS FAILED ===")
         raise RuntimeError(
             f"Classification failed after {self._config.captcha_retries} attempts: {last_error}"
         )
