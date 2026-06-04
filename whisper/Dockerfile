@@ -17,8 +17,8 @@ RUN curl -L -o whisperfile \
 EXPOSE 1233
 
 # Run whisperfile HTTP server
+# .llamafile is a shell script + binary combo — must run with bash
 # --host 0.0.0.0: listen on all interfaces
 # --port 1233: exposed port
 # -l en: English language
-# --gpu disable: CPU only (remove for GPU)
-CMD ["./whisperfile", "--host", "0.0.0.0", "--port", "1233", "-l", "en", "--gpu", "disable"]
+CMD ["bash", "./whisperfile", "--host", "0.0.0.0", "--port", "1233", "-l", "en"]

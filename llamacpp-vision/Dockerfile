@@ -10,10 +10,9 @@
 
 FROM rocm/dev-ubuntu-22.04:6.2.4
 
-# Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies + ROCm development libraries
+# Install build dependencies + ROCm libraries
 RUN apt-get update && apt-get install -y \
     git \
     cmake \
@@ -21,14 +20,28 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     hipblas-dev \
     rocblas-dev \
+    hipblas \
+    rocblas \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone llama.cpp (pinned to recent stable version)
+# Clone llama.cpp (use master for vision server support)
+# b4621 was too old --mmproj only worked with llava-cli, not server
 WORKDIR /build
-RUN git clone --depth 1 --branch b4621 https://github.com/ggml-org/llama.cpp.git
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+
+# Patch: ROCm 6.2 doesn't have __hip_fp8_e4m3 (added in 6.3).
+# Define a fallback type so the typedef doesn't fail on gfx1032.
+RUN cd /build/llama.cpp/ggml/src/ggml-cuda/vendors && \
+    awk '/typedef __hip_fp8_e4m3/ {
+        print "#ifndef __hip_fp8_e4m3"
+        print "  typedef unsigned char __hip_fp8_e4m3;  // fallback for ROCm < 6.3"
+        print "#endif"
+    }
+    {print}' hip.h > hip.h.tmp && \
+    mv hip.h.tmp hip.h
 
 # Build with HIP/ROCm support for AMD GPUs
-# Quote AMDGPU_TARGETS to prevent shell from interpreting semicolons
 WORKDIR /build/llama.cpp
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
@@ -36,20 +49,10 @@ RUN cmake -B build \
     -DAMDGPU_TARGETS="gfx1032" \
     && cmake --build build --config Release -j$(nproc)
 
-# Runtime stage
-FROM rocm/dev-ubuntu-22.04:6.2.4
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install runtime deps only
-RUN apt-get update && apt-get install -y \
-    libgomp1 \
-    hipblas \
-    rocblas \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy built binary
-COPY --from=0 /build/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+# Make shared libs findable and symlink binary to PATH
+RUN echo "/build/llama.cpp/build/lib" > /etc/ld.so.conf.d/llama.conf \
+    && ldconfig \
+    && ln -s /build/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 
 # Expose API port
 EXPOSE 6663
@@ -57,28 +60,20 @@ EXPOSE 6663
 # Environment for AMD GPU support
 ENV HSA_OVERRIDE_GFX_VERSION=10.3.0
 ENV HIP_VISIBLE_DEVICES=0
+ENV LD_LIBRARY_PATH="/build/llama.cpp/build/lib:${LD_LIBRARY_PATH}"
 
 # Models mounted from host at runtime
 VOLUME ["/models"]
 
-# Default: Qwen3VL Q4_K_M on port 6663
-# Override via docker-compose environment
-ENV MODEL_PATH=/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf
-ENV MMPROJ_PATH=/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf
-ENV NGL=99
-ENV CTX_SIZE=4096
-ENV BATCH_SIZE=512
-ENV UBATCH_SIZE=128
-
 ENTRYPOINT ["llama-server"]
-CMD ["-m", "/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf", \
-     "--mmproj", "/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf", \
-     "-ngl", "99", \
-     "--port", "6663", \
-     "--host", "0.0.0.0", \
-     "--ctx-size", "4096", \
-     "--batch-size", "512", \
-     "--ubatch-size", "128", \
-     "-fa", \
-     "--timeout", "300", \
-     "--metrics"]
+CMD ["-m", "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf", \
+    "--mmproj", "/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf", \
+    "-ngl", "99", \
+    "--port", "6663", \
+    "--host", "0.0.0.0", \
+    "--ctx-size", "4096", \
+    "--batch-size", "512", \
+    "--ubatch-size", "128", \
+    "-fa", \
+    "--timeout", "300", \
+    "--metrics"]
