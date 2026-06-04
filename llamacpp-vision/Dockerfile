@@ -32,14 +32,17 @@ RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
 
 # Patch: ROCm 6.2 doesn't have __hip_fp8_e4m3 (added in 6.3).
 # Define a fallback type so the typedef doesn't fail on gfx1032.
-RUN cd /build/llama.cpp/ggml/src/ggml-cuda/vendors && \
-    awk '/typedef __hip_fp8_e4m3/ {
-        print "#ifndef __hip_fp8_e4m3"
-        print "  typedef unsigned char __hip_fp8_e4m3;  // fallback for ROCm < 6.3"
-        print "#endif"
-    }
-    {print}' hip.h > hip.h.tmp && \
-    mv hip.h.tmp hip.h
+RUN python3 -c "
+import re
+with open('/build/llama.cpp/ggml/src/ggml-cuda/vendors/hip.h', 'r') as f:
+    content = f.read()
+content = content.replace(
+    'typedef __hip_fp8_e4m3 __nv_fp8_e4m3;',
+    '#ifndef __hip_fp8_e4m3\n  typedef unsigned char __hip_fp8_e4m3;  // fallback for ROCm < 6.3\n#endif\ntypedef __hip_fp8_e4m3 __nv_fp8_e4m3;'
+)
+with open('/build/llama.cpp/ggml/src/ggml-cuda/vendors/hip.h', 'w') as f:
+    f.write(content)
+"
 
 # Build with HIP/ROCm support for AMD GPUs
 WORKDIR /build/llama.cpp
