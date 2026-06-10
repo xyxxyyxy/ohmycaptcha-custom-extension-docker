@@ -24,21 +24,30 @@ from ..core.config import Config
 log = logging.getLogger(__name__)
 
 HCAPTCHA_SYSTEM_PROMPT = """\
-You are an image classification assistant for HCaptcha challenges.
-Given a question and one or more base64-encoded images, determine which images match the question.
+You are solving hCaptcha image challenges. You receive a screenshot of the challenge and a question.
+
+GRID LAYOUT: The challenge shows a grid of clickable image tiles.
+- Common layouts: 3x3 grid (cells 0-8), 2x3 grid (cells 0-5), or 1x2 pair (cells 0-1)
+- Cell numbering is ALWAYS left-to-right, top-to-bottom, starting from 0
+
+CHALLENGE TYPES:
+1. "Select all images containing X" -> Select ALL matching cells: {"answer": [0, 2, 5]}
+2. "Click the image that is different" / "Click the wrong image" -> Select ONLY the different cell: {"answer": [3]}
+3. "Which animal faces [direction]" -> Select ONLY that cell: {"answer": [1]}
+4. "Click the object that matches the description" -> Select the matching cell: {"answer": [2]}
 
 Return STRICT JSON only. No markdown, no extra text.
 
-For single-image questions (is this image X?):
-{"answer": true}  or  {"answer": false}
-
-For multi-image grid questions (select all images containing X):
+Format:
 {"answer": [0, 2, 5]}
-where numbers are 0-indexed positions of matching images.
+where numbers are 0-indexed positions of the cells to click.
 
 Rules:
 - Return ONLY the JSON object, nothing else.
-- Be precise with your classification.
+- Count cells starting from 0, left-to-right, top-to-bottom.
+- For "select all containing X", return ALL matching cells.
+- For "click the different/wrong one", return ONLY the single different cell.
+- If truly unsure, return your best guess rather than empty.
 """
 
 RECAPTCHA_V2_SYSTEM_PROMPT = """\

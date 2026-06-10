@@ -40,7 +40,7 @@ WORKDIR /build/llama.cpp
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_HIP=ON \
-    -DAMDGPU_TARGETS="gfx1032" \
+    -DAMDGPU_TARGETS="gfx1030" \
     && cmake --build build --config Release -j$(nproc)
 
 # Make shared libs findable and symlink binary to PATH
@@ -52,6 +52,8 @@ RUN echo "/build/llama.cpp/build/lib" > /etc/ld.so.conf.d/llama.conf \
 EXPOSE 6663
 
 # Environment for AMD GPU support
+# HSA_OVERRIDE_GFX_VERSION=10.3.0 maps gfx1032 (RX 6600) to gfx1030
+# This must match the AMDGPU_TARGETS build flag above
 ENV HSA_OVERRIDE_GFX_VERSION=10.3.0
 ENV HIP_VISIBLE_DEVICES=0
 ENV LD_LIBRARY_PATH="/build/llama.cpp/build/lib:${LD_LIBRARY_PATH}"
@@ -60,14 +62,4 @@ ENV LD_LIBRARY_PATH="/build/llama.cpp/build/lib:${LD_LIBRARY_PATH}"
 VOLUME ["/models"]
 
 ENTRYPOINT ["llama-server"]
-CMD ["-m", "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf", \
-    "--mmproj", "/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf", \
-    "-ngl", "99", \
-    "--port", "6663", \
-    "--host", "0.0.0.0", \
-    "--ctx-size", "4096", \
-    "--batch-size", "512", \
-    "--ubatch-size", "128", \
-    "-fa", \
-    "--timeout", "300", \
-    "--metrics"]
+CMD ["-m", "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf", "--mmproj", "/models/mmproj-Qwen3VL-8B-Instruct-F16.gguf", "-ngl", "99", "--port", "6663", "--host", "0.0.0.0", "--ctx-size", "4096", "--batch-size", "512", "--ubatch-size", "512", "-fa", "on", "--timeout", "300", "--metrics"]

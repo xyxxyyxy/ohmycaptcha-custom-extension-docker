@@ -17,7 +17,7 @@ import httpx
 from playwright.async_api import async_playwright
 
 LLAMACPP_URL = "https://llamacpp.xyxxyyxy.dev"
-VISION_MODEL = "Qwen3VL-8B-Instruct-Q8_0"
+VISION_MODEL = "Qwen3VL-8B-Instruct-Q4_K_M"
 SHIM_URL = "http://localhost:1232"
 
 http_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
@@ -312,12 +312,12 @@ If tests 1-3 show:
   
 Then the llama.cpp server needs to be restarted with the correct model:
   1. Stop llama.cpp
-  2. Start with: ./llama-server -m Qwen3VL-8B-Instruct-Q8_0.gguf ...
+  2. Start with: ./llama-server -m Qwen3VL-8B-Instruct-Q4_K_M.gguf ...
   3. Or configure with --models-max > 1 to allow model swapping
 
 If test 4 (text-only) works but test 5 (vision) fails:
   - The loaded model doesn't support vision ( DeepSeek-OCR is text-only)
-  - Need to load Qwen3VL-8B-Instruct-Q8_0 which has vision capabilities
+  - Need to load Qwen3VL-8B-Instruct-Q4_K_M which has vision capabilities
 
 If test 5 works but test 6 (shim) fails:
   - The captcha-solver shim has a bug

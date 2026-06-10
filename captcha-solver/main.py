@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 LLAMACPP_URL = os.getenv("LLAMACPP_URL", "https://llamacpp.xyxxyyxy.dev")
-VISION_MODEL = os.getenv("VISION_MODEL", "Qwen3VL-8B-Instruct-Q8_0")
+VISION_MODEL = os.getenv("VISION_MODEL", "Qwen3VL-8B-Instruct-Q4_K_M")
 UNLOAD_AFTER_SOLVE = os.getenv("UNLOAD_AFTER_SOLVE", "false").lower() == "true"
 
 log.info("=== CAPTCHA SOLVER SHIM START ===")
@@ -219,7 +219,7 @@ def _model_names_match(name1: str, name2: str) -> bool:
     """Flexible model name matching.
     
     Handles differences like:
-      'Qwen3VL 8B Q8_0 Instruct' == 'Qwen3VL-8B-Instruct-Q8_0'
+      'Qwen3VL 8B Q4KM Instruct' == 'Qwen3VL-8B-Instruct-Q4_K_M'
     By normalizing: lowercase, remove all non-alphanumeric, compare.
     """
     if not name1 or not name2:
@@ -418,6 +418,40 @@ def _resize_images_in_payload(body: dict) -> dict:
 WHISPER_URL = os.getenv("WHISPER_URL", "http://whisper:1233")
 log.info("WHISPER_URL=%s", WHISPER_URL)
 
+async def _try_whisper_direct(audio_bytes: bytes, filename: str) -> dict | None:
+    """Directly proxy audio to whisperfile, trying multiple endpoints."""
+    ext = filename.split(".")[-1].lower() if "." in filename else "mp3"
+    mime_types = {
+        "mp3": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg",
+        "flac": "audio/flac", "m4a": "audio/mp4", "webm": "audio/webm",
+    }
+    content_type = mime_types.get(ext, "audio/mpeg")
+
+    # Try multiple whisperfile endpoints
+    endpoints = ["/v1/audio/transcriptions", "/transcribe", "/inference"]
+    for endpoint in endpoints:
+        try:
+            log.info("[whisper-direct] Trying %s%s...", WHISPER_URL, endpoint)
+            r = await http_client.post(
+                f"{WHISPER_URL}{endpoint}",
+                files={"file": (filename, io.BytesIO(audio_bytes), content_type)},
+                data={"model": "whisper-1", "language": "en"},
+                timeout=60.0
+            )
+            log.info("[whisper-direct] %s -> HTTP %d", endpoint, r.status_code)
+            if r.status_code == 200:
+                try:
+                    return r.json()
+                except Exception:
+                    return {"text": r.text.strip()}
+            if r.status_code in (422, 400):
+                log.info("[whisper-direct] %s exists but wants different params", endpoint)
+                continue
+        except Exception as e:
+            log.debug("[whisper-direct] %s error: %s", endpoint, str(e)[:200])
+    return None
+
+
 @app.post("/v1/audio/transcriptions")
 async def audio_transcription(
     file: UploadFile = File(...),
@@ -430,9 +464,24 @@ async def audio_transcription(
     contents = await file.read()
     log.info("[/v1/audio/transcriptions] Received: %d bytes, model=%s, lang=%s", len(contents), model, language)
 
+    # Try direct whisper proxy first (multi-endpoint)
+    direct_result = await _try_whisper_direct(contents, file.filename)
+    if direct_result:
+        text = direct_result.get("text", "").strip().lower()
+        log.info("[/v1/audio/transcriptions] Direct whisper result: %s", text[:100])
+        # Normalize digit words to digits
+        word_to_digit = {
+            "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+            "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+        }
+        for word, digit in word_to_digit.items():
+            text = text.replace(word, digit)
+        return {"text": text}
+
+    # Fallback to fallback handler (OpenRouter etc.)
     try:
         result = await fallback.audio_transcriptions(contents, file.filename, language)
-        log.info("[/v1/audio/transcriptions] Transcript: %s", result.get("text", "")[:100])
+        log.info("[/v1/audio/transcriptions] Fallback result: %s", result.get("text", "")[:100])
         return result
     except RuntimeError as e:
         log.error("[/v1/audio/transcriptions] All tiers failed: %s", e)

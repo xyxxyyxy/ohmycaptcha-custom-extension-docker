@@ -24,12 +24,15 @@ import httpx
 from PIL import Image
 
 # ── Configuration ──
+# Local Docker vision server (port 6663) - tests the dedicated Qwen3VL container
+VISION_URL = os.getenv("VISION_URL", "http://localhost:6663")
+# Remote fallback llama.cpp (port 8080) - only used if local fails
 LLAMACPP_URL = os.getenv("LLAMACPP_URL", "https://llamacpp.xyxxyyxy.dev")
 SHIM_URL = os.getenv("SHIM_URL", "http://localhost:1232")
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:1231")
 WHISPER_URL = os.getenv("WHISPER_URL", "http://localhost:1233")
 CDP_URL = os.getenv("CDP_URL", "http://localhost:9222")
-VISION_MODEL = os.getenv("VISION_MODEL", "Qwen3VL-8B-Instruct-Q8_0")
+VISION_MODEL = os.getenv("VISION_MODEL", "Qwen3VL-8B-Instruct-Q4_K_M")
 
 RESULTS: list[dict] = []
 http_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
@@ -49,15 +52,25 @@ def section(name: str):
     print(f"{'='*70}")
 
 
+async def test_vision_server_health():
+    section("1. Local Vision Server (port 6663) - Health")
+    try:
+        r = await http_client.get(f"{VISION_URL}/health")
+        log("vision-health", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "warn")
+        if r.status_code == 200:
+            log("vision-health", f"Response: {r.text[:200]}", "info")
+    except Exception as e:
+        log("vision-health", f"FAILED: {e}", "fail")
+
 async def test_llamacpp_health():
-    section("1. llama.cpp Direct - Health")
+    section("1b. Remote llama.cpp Fallback - Health")
     try:
         r = await http_client.get(f"{LLAMACPP_URL}/health")
         log("llama-health", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "warn")
         if r.status_code == 200:
             log("llama-health", f"Response: {r.text[:200]}", "info")
     except Exception as e:
-        log("llama-health", f"FAILED: {e}", "fail")
+        log("llama-health", f"FAILED: {e}", "warn")  # warn not fail - fallback only
 
 
 async def test_llamacpp_models():
@@ -108,16 +121,16 @@ async def test_llamacpp_text_chat():
 
 
 async def test_llamacpp_vision_chat():
-    section("4. llama.cpp Direct - Vision Chat (CRITICAL)")
+    section("4. Local Vision Server - Vision Chat (CRITICAL)")
     # Create tiny test image
     img = Image.new("RGB", (50, 50), color="red")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-    log("llama-vision", f"Test image: {len(b64)} bytes base64", "info")
+    log("vision-chat", f"Test image: {len(b64)} bytes base64", "info")
 
     payload = {
-        "model": VISION_MODEL,
+        "model": "Qwen3VL-8B-Instruct-Q4_K_M",
         "messages": [{
             "role": "user",
             "content": [
@@ -129,37 +142,40 @@ async def test_llamacpp_vision_chat():
         "max_tokens": 10
     }
     try:
-        r = await http_client.post(f"{LLAMACPP_URL}/v1/chat/completions", json=payload)
-        log("llama-vision", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "fail")
+        r = await http_client.post(f"{VISION_URL}/v1/chat/completions", json=payload)
+        log("vision-chat", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "fail")
         if r.status_code == 200:
             data = r.json()
             answer = data["choices"][0]["message"]["content"]
-            log("llama-vision", f"Answer: '{answer}'", "pass")
-            log("llama-vision", "VISION IS WORKING!", "pass")
+            log("vision-chat", f"Answer: '{answer}'", "pass")
+            log("vision-chat", "VISION IS WORKING!", "pass")
         else:
             err = r.text[:500]
-            log("llama-vision", f"Error body: {err}", "fail")
+            log("vision-chat", f"Error body: {err}", "fail")
             if "vision" in err.lower() or "mmproj" in err.lower():
-                log("llama-vision", "-> Need --mmproj flag on llama-server", "warn")
+                log("vision-chat", "-> Check mmproj is loaded: docker logs llamacpp-vision", "warn")
             elif "proxy" in err.lower():
-                log("llama-vision", "-> Proxy can't reach backend. Check nginx routing.", "warn")
+                log("vision-chat", "-> Local vision server not reachable. Is it running?", "warn")
     except Exception as e:
-        log("llama-vision", f"FAILED: {e}", "fail")
+        log("vision-chat", f"FAILED: {e}", "fail")
 
 
 async def test_shim_health():
     section("5. Captcha-Solver Shim - Health")
     try:
-        r = await http_client.get(f"{SHIM_URL}/health")
+        r = await http_client.get(f"{SHIM_URL}/stats", timeout=5.0)
         log("shim-health", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "fail")
         if r.status_code == 200:
             data = r.json()
             log("shim-health", f"shim_status: {data.get('shim_status')}", "info")
-            log("shim-health", f"llamacpp_status: {data.get('llamacpp_status')}", "info")
+            log("shim-health", f"vision_url: {data.get('llamacpp_url')}", "info")
             log("shim-health", f"currently_loaded: {data.get('currently_loaded')}", "info")
-            log("shim-health", f"vision_model_target: {data.get('vision_model_target')}", "info")
+            log("shim-health", f"fallback_count: {data.get('fallback_count')}", "info")
     except Exception as e:
         log("shim-health", f"FAILED: {e}", "fail")
+        log("shim-health", "  Is the shim container running?", "info")
+        log("shim-health", "  Start it: docker compose up -d captcha-solver", "info")
+        log("shim-health", "  Check logs: docker logs captcha-solver", "info")
 
 
 async def test_shim_models():
@@ -220,17 +236,19 @@ async def test_bridge_health():
 
 async def test_whisper():
     section("9. Whisperfile - Health")
-    try:
-        r = await http_client.get(f"{WHISPER_URL}/health", timeout=5.0)
-        log("whisper", f"Status: {r.status_code}", "pass" if r.status_code == 200 else "warn")
-    except Exception as e:
-        log("whisper", f"Not reachable: {e}", "warn")
-        # Try alternative endpoint
+    # Whisperfile may not have a dedicated /health endpoint
+    # Try the base URL first (should return something if running)
+    endpoints = ["/health", "/", "/v1/audio/transcriptions"]
+    for endpoint in endpoints:
         try:
-            r = await http_client.get(f"{WHISPER_URL}/v1/audio/transcriptions", timeout=5.0)
-            log("whisper", f"Alt endpoint status: {r.status_code}", "info")
-        except Exception as e2:
-            log("whisper", f"Alt endpoint also failed: {e2}", "warn")
+            r = await http_client.get(f"{WHISPER_URL}{endpoint}", timeout=5.0)
+            if r.status_code in (200, 404, 405):  # 405 = method not allowed = server is up
+                log("whisper", f"Endpoint {endpoint}: {r.status_code} (server running)", "pass")
+                return
+        except Exception:
+            continue
+    log("whisper", "Not reachable on any endpoint. Is container running?", "warn")
+    log("whisper", f"  Check: docker logs whisper", "info")
 
 
 async def test_brave_cdp():
@@ -311,8 +329,8 @@ async def test_hcaptcha_screenshot():
                 "max_tokens": 100
             }
 
-            log("hcaptcha", f"Sending {len(b64)} bytes to vision model...", "info")
-            r = await http_client.post(f"{SHIM_URL}/v1/chat/completions", json=payload)
+            log("hcaptcha", f"Sending {len(b64)} bytes to local vision server...", "info")
+            r = await http_client.post(f"{VISION_URL}/v1/chat/completions", json=payload)
             log("hcaptcha", f"Vision response: {r.status_code}", "pass" if r.status_code == 200 else "fail")
             if r.status_code == 200:
                 answer = r.json()["choices"][0]["message"]["content"]
@@ -339,18 +357,18 @@ def print_summary():
 
     # Key recommendations
     print("\n  KEY FINDINGS:")
-    vision_direct_ok = any("llama-vision" in r["category"] and r["status"] == "pass" for r in RESULTS)
-    vision_shim_ok = any("shim-vision" in r["category"] and r["status"] == "pass" for r in RESULTS)
+    vision_local_ok = any("vision-chat" in r["category"] and r["status"] == "pass" for r in RESULTS)
+    vision_server_ok = any("vision-health" in r["category"] and r["status"] == "pass" for r in RESULTS)
 
-    if not vision_direct_ok:
-        print("  !! llama.cpp direct vision FAILED")
-        print("  -> Add --mmproj to your llama-server systemd service")
-        print("  -> See: systemd/llamacpp.service in this repo")
-    elif vision_direct_ok and not vision_shim_ok:
-        print("  !! llama.cpp vision works, but shim fails")
-        print("  -> Check SHIM_URL and docker-compose networking")
-    elif vision_direct_ok and vision_shim_ok:
-        print("  Vision pipeline is WORKING!")
+    if not vision_server_ok:
+        print("  !! Local vision server (port 6663) not reachable")
+        print("  -> Check: docker logs -f llamacpp-vision")
+        print("  -> Rebuild: docker compose build --no-cache llamacpp-vision")
+    elif vision_server_ok and not vision_local_ok:
+        print("  !! Vision server running, but vision chat failed")
+        print("  -> Check mmproj is loaded: docker logs llamacpp-vision | grep mmproj")
+    elif vision_local_ok:
+        print("  LOCAL VISION PIPELINE IS WORKING!")
 
     brave_ok = any("brave-cdp" in r["category"] and r["status"] == "pass" for r in RESULTS)
     if not brave_ok:
@@ -383,6 +401,7 @@ async def main():
     print("=" * 70)
 
     # Run all tests
+    await test_vision_server_health()
     await test_llamacpp_health()
     await test_llamacpp_models()
     await test_llamacpp_text_chat()
@@ -404,7 +423,7 @@ async def main():
 
     print(f"\n  Next steps:")
     print(f"  1. Check the report: cat {report_path}")
-    print(f"  2. If vision fails, fix llama.cpp: see systemd/llamacpp.service")
+    print(f"  2. If local vision fails: docker logs -f llamacpp-vision")
     print(f"  3. Deploy changes: docker compose build && docker compose up -d")
 
     await http_client.aclose()

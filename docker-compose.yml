@@ -32,6 +32,20 @@ services:
       retries: 3
       start_period: 120s
 
+  whisper:
+    build: ./whisper
+    container_name: whisper
+    ports:
+      - "1233:1233"
+    restart: unless-stopped
+    # Simple TCP healthcheck - whisperfile doesn't have a /health endpoint
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:1233/v1/audio/transcriptions || [ $? -eq 405 ] || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   captcha-solver:
     build: ./captcha-solver
     container_name: captcha-solver
@@ -40,6 +54,8 @@ services:
     depends_on:
       llamacpp-vision:
         condition: service_healthy
+      whisper:
+        condition: service_started
     environment:
       # Docker service name as hostname (containers share default bridge network)
       # llamacpp-vision container serves Qwen3VL on port 6663
@@ -53,13 +69,12 @@ services:
       - FALLBACK_ENABLED=${FALLBACK_ENABLED:-true}
       - FALLBACK_VISION_MODEL=meta-llama/llama-4-maverick:free
     restart: unless-stopped
-
-  whisper:
-    build: ./whisper
-    container_name: whisper
-    ports:
-      - "1233:1233"
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   captcha-bridge:
     build: ./captcha-bridge

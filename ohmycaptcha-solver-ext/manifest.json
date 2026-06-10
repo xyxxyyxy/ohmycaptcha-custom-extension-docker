@@ -11,10 +11,14 @@
   },
   "permissions": [
     "storage",
-    "contextMenus"
+    "contextMenus",
+    "permissions"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "http://192.168.3.25:1231/*",
+    "http://*/*",
+    "https://*/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",

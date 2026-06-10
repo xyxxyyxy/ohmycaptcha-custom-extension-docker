@@ -113,7 +113,7 @@ curl http://localhost:1231/api/v1/health   # OhMyCaptcha bridge + CDP status
 | `CLOUD_BASE_URL` | — | OpenAI-compatible endpoint (cloud model) |
 | `CLOUD_API_KEY` | — | API key for cloud model |
 | `LOCAL_BASE_URL` | `http://captcha-solver:8000/v1` | Local llama.cpp endpoint |
-| `LOCAL_MODEL` | `Qwen3VL-8B-Instruct-Q8_0` | Vision model name |
+| `LOCAL_MODEL` | `Qwen3VL-8B-Instruct-Q4_K_M` | Vision model name |
 
 ## Troubleshooting
 

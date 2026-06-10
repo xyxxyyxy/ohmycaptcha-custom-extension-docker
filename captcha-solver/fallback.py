@@ -199,8 +199,7 @@ class FallbackHandler:
     async def _try_whisperfile(
         self, audio_bytes: bytes, filename: str, language: str
     ) -> dict | None:
-        """Try self-hosted whisperfile. Returns None on failure."""
-        # Determine content type from filename
+        """Try self-hosted whisperfile. Tries multiple endpoints. Returns None on failure."""
         ext = filename.split(".")[-1].lower() if "." in filename else "mp3"
         mime_types = {
             "mp3": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg",
@@ -208,15 +207,47 @@ class FallbackHandler:
         }
         content_type = mime_types.get(ext, "audio/mpeg")
 
-        r = await self._http.post(
-            f"{WHISPER_URL}/v1/audio/transcriptions",
-            files={"file": (filename, io.BytesIO(audio_bytes), content_type)},
-            data={"model": "whisper-1", "language": language},
-            timeout=60.0
-        )
-        if r.status_code == 200:
-            return r.json()
-        log.debug("[Fallback] whisperfile error: HTTP %d: %s", r.status_code, r.text[:300])
+        # Try multiple whisperfile endpoints (different versions use different paths)
+        endpoints_to_try = [
+            # OpenAI-compatible (newer whisperfile builds)
+            ("/v1/audio/transcriptions", {"model": "whisper-1", "language": language}),
+            # Whisperfile native endpoint
+            ("/transcribe", {}),
+            # Alternative native endpoint
+            ("/inference", {}),
+        ]
+
+        for endpoint, extra_data in endpoints_to_try:
+            try:
+                log.info("[Fallback] Trying whisperfile endpoint: %s", endpoint)
+                r = await self._http.post(
+                    f"{WHISPER_URL}{endpoint}",
+                    files={"file": (filename, io.BytesIO(audio_bytes), content_type)},
+                    data=extra_data,
+                    timeout=60.0
+                )
+                log.info("[Fallback] Whisperfile %s -> HTTP %d", endpoint, r.status_code)
+
+                if r.status_code == 200:
+                    # Try to parse as JSON, fallback to plain text
+                    try:
+                        return r.json()
+                    except Exception:
+                        # Plain text response - wrap in expected format
+                        return {"text": r.text.strip()}
+
+                # 422 = unprocessable entity (endpoint exists but wrong params)
+                # 400 = bad request (endpoint exists)
+                if r.status_code in (422, 400):
+                    log.info("[Fallback] Endpoint %s exists but returned %d, trying next...",
+                             endpoint, r.status_code)
+                    continue
+
+            except Exception as e:
+                log.debug("[Fallback] Whisperfile endpoint %s error: %s", endpoint, str(e)[:200])
+                continue
+
+        log.warning("[Fallback] All whisperfile endpoints failed")
         return None
 
     # ── Internal: Tier 2 (OpenRouter) ──

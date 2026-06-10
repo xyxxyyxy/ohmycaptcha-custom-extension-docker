@@ -222,22 +222,41 @@ window.sendMsgToSolverCS = function(action) {
         params.captchaType = widget.captchaType;
         params.widgetId = widget.widgetId;
 
-        console.log(LOG, "Sending solve request:", widget.captchaType, params);
+        console.log(LOG, "=== SOLVE WIDGET === type:", widget.captchaType, "id:", widget.widgetId);
+        console.log(LOG, "Params:", JSON.stringify(params));
 
         chrome.runtime.sendMessage({
             action: "solve",
             params: params
         }, function(response) {
-            console.log(LOG, "Solve response:", response);
+            console.log(LOG, "=== SOLVE RESPONSE ===", response);
+            
+            if (chrome.runtime.lastError) {
+                console.error(LOG, "Runtime error:", chrome.runtime.lastError.message);
+                if (btn) btn.innerText = "Error: " + chrome.runtime.lastError.message.substring(0, 30);
+                setTimeout(function() { if (btn) btn.innerText = "\u{1F916} Solve"; }, 5000);
+                return;
+            }
+            
             if (response && response.success) {
-                processor.onSolved(widget, response.answer);
-                if (btn) btn.innerText = "Solved!";
+                let answer = response.answer;
+                console.log(LOG, "Success! Answer length:", answer ? answer.length : 0);
+                console.log(LOG, "Answer preview:", answer ? answer.substring(0, 60) : "EMPTY");
+                
+                try {
+                    processor.onSolved(widget, answer);
+                    console.log(LOG, "onSolved called successfully");
+                    if (btn) btn.innerText = "Solved!";
+                } catch (e) {
+                    console.error(LOG, "onSolved threw:", e);
+                    if (btn) btn.innerText = "Inject failed!";
+                }
                 setTimeout(function() { if (btn) btn.innerText = "\u{1F916} Solve"; }, 3000);
             } else {
-                let err = (response && response.error) ? response.error : "Unknown error";
+                let err = (response && response.error) ? response.error : "Unknown error (null response)";
                 console.error(LOG, "Solve failed:", err);
                 if (btn) btn.innerText = "Failed: " + err.substring(0, 30);
-                setTimeout(function() { if (btn) btn.innerText = "\u{1F916} Solve"; }, 3000);
+                setTimeout(function() { if (btn) btn.innerText = "\u{1F916} Solve"; }, 5000);
             }
         });
     }

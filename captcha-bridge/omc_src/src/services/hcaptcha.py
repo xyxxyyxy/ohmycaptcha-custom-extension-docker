@@ -120,6 +120,34 @@ _CLICK_VERIFY_JS = """
 }
 """
 
+# JS: Click the refresh button to get a new challenge
+_CLICK_REFRESH_JS = """
+() => {
+    const selectors = [
+        '.refresh-button', '#refresh', '[class*="refresh"]',
+        'button[title*="refresh" i]', 'button[aria-label*="refresh" i]',
+        '.challenge-refresh', '.reload', '.new-challenge'
+    ];
+    for (const sel of selectors) {
+        try {
+            const btn = document.querySelector(sel);
+            if (btn) { btn.click(); return {clicked: true, selector: sel}; }
+        } catch(e) {}
+    }
+    // Fallback: try title/aria attributes
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+        const title = (btn.getAttribute('title') || '').toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (title.includes('refresh') || title.includes('new') || aria.includes('refresh') || aria.includes('new')) {
+            btn.click();
+            return {clicked: true, selector: 'button[title/aria=' + (btn.getAttribute('title') || btn.getAttribute('aria-label')) + ']'};
+        }
+    }
+    return {clicked: false};
+}
+"""
+
 # JS: Check if challenge is still showing (to detect "multiple correct" etc)
 _CHECK_CHALLENGE_STATUS_JS = """
 () => {
@@ -372,171 +400,264 @@ class HCaptchaSolver:
         return None
 
     async def _solve_image_grid(self, page, challenge: dict) -> str | None:
-        """Screenshot grid, send to vision model, JS-click tiles inside iframe.
+        """Solve hCaptcha image grid with challenge retry and refresh.
 
-        KEY FIX: Tile clicking ALWAYS happens, even when vision model fails.
-        If vision model returns 502/empty, we fall back to random tiles so
-        the user can see the browser interacting with the page.
+        Strategy:
+        1. Try to solve current challenge (screenshot → vision → click tiles → verify)
+        2. If challenge fails or is too difficult, click refresh to get a new one
+        3. Retry up to 3 challenges per page visit
+        4. Each challenge: vision model suggests tiles, we click them, check result
         """
         log.info("[hCaptcha] _solve_image_grid: START")
 
-        # Get the challenge frame object (needed for JS evaluate)
-        challenge_frame = None
-        for f in page.frames:
-            if f.url and "hcaptcha.com" in f.url and ("challenge" in f.url or "checkcaptcha" in f.url):
-                challenge_frame = f
-                break
+        for challenge_attempt in range(3):
+            log.info("[hCaptcha] Challenge attempt %d/3", challenge_attempt + 1)
 
-        if not challenge_frame:
-            log.error("[hCaptcha] Challenge frame object not found")
-            return None
+            # Re-locate challenge frame (it may have reloaded after refresh)
+            challenge_frame = None
+            for _ in range(10):
+                for f in page.frames:
+                    if f.url and "hcaptcha.com" in f.url and ("challenge" in f.url or "checkcaptcha" in f.url):
+                        challenge_frame = f
+                        break
+                if challenge_frame:
+                    break
+                await asyncio.sleep(0.5)
 
-        log.info("[hCaptcha] Challenge frame URL: %s", challenge_frame.url[:100])
+            if not challenge_frame:
+                log.error("[hCaptcha] Challenge frame not found")
+                return None
 
-        # ── Inspect available tiles first ──
-        try:
-            tile_info = await challenge_frame.evaluate(_INSPECT_TILES_JS)
-            log.info("[hCaptcha] Found %d tiles: %s",
-                     tile_info["count"],
-                     [d["tag"] + "." + d["className"][:20] for d in tile_info["descriptions"]])
-        except Exception as e:
-            log.warning("[hCaptcha] Tile inspection failed: %s", e)
-            tile_info = {"count": 9, "descriptions": []}
+            log.info("[hCaptcha] Challenge frame URL: %s", challenge_frame.url[:100])
 
-        # ── Detect challenge sub-type ──
-        # hCaptcha has multiple challenge types:
-        # - image_grid: 3x3 grid, click matching images (most common)
-        # - drag_drop: drag object to target (e.g. "drag the screw to the empty joint")
-        # - orientation: click animal facing same direction
-        challenge_subtype = "unknown"
-        canvas_count = sum(1 for d in tile_info.get("descriptions", []) if d.get("tag") == "CANVAS")
-        button_count = sum(1 for d in tile_info.get("descriptions", []) if d.get("tag") == "BUTTON")
-
-        if canvas_count > 0 and tile_info.get("count", 0) <= 10:
-            # Drag-drop challenges have a CANVAS element + few UI buttons
-            challenge_subtype = "drag_drop"
-        elif tile_info.get("count", 0) >= 6:
-            challenge_subtype = "image_grid"
-        log.info("[hCaptcha] Challenge subtype detected: %s (canvas=%d, buttons=%d, total=%d)",
-                 challenge_subtype, canvas_count, button_count, tile_info.get("count", 0))
-
-        # ── Extract question ──
-        question = ""
-        try:
-            question = await challenge_frame.evaluate("""
-                () => {
-                    const el = document.querySelector('.prompt-text, .challenge-description, .question, .task-desc, [class*="prompt"]');
-                    return el ? el.innerText.trim() : '';
-                }
-            """)
-            log.info("[hCaptcha] Question: '%s'", question)
-        except Exception as e:
-            log.warning("[hCaptcha] Question extract failed: %s", e)
-            question = "Select all matching images"
-
-        # ── Screenshot ──
-        log.info("[hCaptcha] Taking screenshot...")
-        try:
-            screenshot_bytes = await page.screenshot()
-            log.info("[hCaptcha] Screenshot: %d bytes", len(screenshot_bytes))
-        except Exception as e:
-            log.error("[hCaptcha] Screenshot failed: %s", e)
-            screenshot_bytes = None
-
-        # ── Determine which tiles to click ──
-        # VISION MODEL ATTEMPT (best effort - don't let failure stop us)
-        answer = []
-        if screenshot_bytes and self._classifier is not None:
-            b64_image = base64.b64encode(screenshot_bytes).decode()
-            log.info("[hCaptcha] Calling vision model...")
+            # ── Inspect tiles ──
             try:
-                result = await self._classifier.solve({
-                    "type": "HCaptchaClassification",
-                    "question": question,
-                    "image": b64_image,
-                })
-                log.info("[hCaptcha] Vision result: %s", result)
-                answer = result.get("answer", [])
-                if not isinstance(answer, list):
-                    log.error("[hCaptcha] Non-list answer: %s", answer)
-                    answer = []
+                tile_info = await challenge_frame.evaluate(_INSPECT_TILES_JS)
+                log.info("[hCaptcha] Found %d tiles", tile_info["count"])
             except Exception as e:
-                log.error("[hCaptcha] Vision model FAILED: %s", e, exc_info=True)
-                answer = []
-        else:
-            log.info("[hCaptcha] Skipping vision model (no screenshot or no classifier)")
+                log.warning("[hCaptcha] Tile inspection failed: %s", e)
+                tile_info = {"count": 9, "descriptions": []}
 
-        # FALLBACK: Always produce tile indices to click
-        # But only for image_grid — drag_drop needs different handling
-        if not answer:
-            if challenge_subtype == "drag_drop":
-                log.warning("[hCaptcha] Drag-drop challenge WITHOUT vision model — cannot solve reliably")
-                # Try clicking on the canvas area (may trigger something)
-                canvas_indices = [i for i, d in enumerate(tile_info.get("descriptions", [])) if d.get("tag") == "CANVAS"]
-                if canvas_indices:
-                    answer = canvas_indices[:1]
-                    log.warning("[hCaptcha] Attempting canvas click: %s", answer)
-                else:
-                    answer = [0]
+            # ── Extract question FIRST (needed for subtype detection) ──
+            question = ""
+            try:
+                question = await challenge_frame.evaluate("""
+                    () => {
+                        const el = document.querySelector('.prompt-text, .challenge-description, .question, .task-desc, [class*="prompt"]');
+                        return el ? el.innerText.trim() : '';
+                    }
+                """)
+                log.info("[hCaptcha] Question: '%s'", question)
+            except Exception as e:
+                log.warning("[hCaptcha] Question extract failed: %s", e)
+                question = "Select all matching images"
+
+            # ── Detect challenge sub-type ──
+            tile_count = tile_info.get("count", 9)
+            canvas_count = sum(1 for d in tile_info.get("descriptions", []) if d.get("tag") == "CANVAS")
+            question_lower = question.lower()
+            
+            is_logic_puzzle = any(kw in question_lower for kw in [
+                "wrong", "different", "odd one", "does not belong",
+                "facing", "direction", "orientation",
+                "match the", "same as", "identical",
+            ])
+            
+            if canvas_count > 0 and tile_count <= 10 and tile_count < 4:
+                challenge_subtype = "drag_drop"
+            elif tile_count <= 3 and is_logic_puzzle:
+                challenge_subtype = "logic_puzzle"  # 1x2 or 1x3 grid
+            elif tile_count >= 4:
+                challenge_subtype = "image_grid"
             else:
-                tile_count = tile_info.get("count", 9)
-                # Click 2-4 random tiles (hCaptcha grids are typically 3x3 = 9 tiles)
-                num_to_click = min(random.randint(2, 4), tile_count)
-                answer = random.sample(range(tile_count), num_to_click)
-                log.warning("[hCaptcha] Using RANDOM tile fallback (vision unavailable): %s", answer)
-        else:
-            log.info("[hCaptcha] Using vision model tiles: %s", answer)
+                challenge_subtype = "unknown"
+            
+            log.info("[hCaptcha] Subtype: %s (tiles=%d, canvas=%d, logic=%s)",
+                     challenge_subtype, tile_count, canvas_count, is_logic_puzzle)
 
-        # ── Click tiles via JS inside the challenge frame ──
-        # ALWAYS execute this, even with random fallback
-        log.info("[hCaptcha] JS-clicking tiles %s inside challenge iframe...", answer)
-        try:
-            click_result = await challenge_frame.evaluate(_CLICK_TILES_JS, answer)
-            log.info("[hCaptcha] Click result: %s", click_result)
-        except Exception as e:
-            log.error("[hCaptcha] JS tile click FAILED: %s", e)
-
-        await asyncio.sleep(1)
-
-        # ── Click verify via JS ──
-        log.info("[hCaptcha] JS-clicking verify...")
-        try:
-            verify_result = await challenge_frame.evaluate(_CLICK_VERIFY_JS)
-            log.info("[hCaptcha] Verify result: %s", verify_result)
-        except Exception as e:
-            log.error("[hCaptcha] JS verify click FAILED: %s", e)
-
-        # ── Check challenge status (detect "multiple correct" etc) ──
-        await asyncio.sleep(2)
-        try:
-            status = await challenge_frame.evaluate(_CHECK_CHALLENGE_STATUS_JS)
-            log.info("[hCaptcha] Challenge status: %s", status)
-            if status.get("hasError"):
-                log.warning("[hCaptcha] Challenge error: %s", status.get("errorText"))
-            # If challenge still showing with same prompt, we may need to click more tiles
-            if status.get("hasPrompt") and not status.get("hasError"):
-                log.info("[hCaptcha] Challenge still active, clicking 2 more random tiles...")
-                extra = random.sample(range(tile_info.get("count", 9)), min(2, tile_info.get("count", 9)))
+            # Skip drag-drop challenges - refresh to get image grid
+            if challenge_subtype == "drag_drop":
+                log.info("[hCaptcha] Drag-drop challenge - refreshing for image grid...")
                 try:
-                    await challenge_frame.evaluate(_CLICK_TILES_JS, extra)
-                    await asyncio.sleep(0.5)
-                    await challenge_frame.evaluate(_CLICK_VERIFY_JS)
+                    await challenge_frame.evaluate(_CLICK_REFRESH_JS)
+                    await asyncio.sleep(3)
+                    continue
                 except Exception as e:
-                    log.debug("[hCaptcha] Extra click failed: %s", e)
-        except Exception as e:
-            log.debug("[hCaptcha] Status check failed: %s", e)
+                    log.warning("[hCaptcha] Refresh failed: %s", e)
+                    return None
 
-        # ── Wait for token ──
-        log.info("[hCaptcha] Polling for token...")
-        await asyncio.sleep(3)
-        for i in range(8):
-            token = await page.evaluate(_EXTRACT_TOKEN_JS)
-            status = "FOUND" if (isinstance(token, str) and len(token) > 20) else "none"
-            log.info("[hCaptcha] Poll %d/8: %s", i + 1, status)
-            if isinstance(token, str) and len(token) > 20:
-                return token
+            # ── Screenshot ──
+            screenshot_bytes = await self._screenshot_challenge(page, challenge_frame)
+
+            # ── Get tiles from vision model ──
+            answer = []
+            if screenshot_bytes and self._classifier is not None:
+                b64_image = base64.b64encode(screenshot_bytes).decode()
+                
+                # Enhance question with challenge type context
+                enhanced_question = question
+                if challenge_subtype == "logic_puzzle":
+                    enhanced_question = (
+                        f"[LOGIC PUZZLE - {tile_count} cells] {question}\n"
+                        f"This is a logic puzzle with {tile_count} options. "
+                        f"Select the SINGLE correct answer."
+                    )
+                elif tile_count <= 6:
+                    enhanced_question = (
+                        f"[SMALL GRID - {tile_count} cells] {question}\n"
+                        f"Grid has {tile_count} cells numbered 0-{tile_count-1}."
+                    )
+                else:
+                    enhanced_question = (
+                        f"[IMAGE GRID - {tile_count} cells] {question}\n"
+                        f"Grid has {tile_count} cells numbered 0-{tile_count-1}. "
+                        f"Select ALL matching cells."
+                    )
+                
+                log.info("[hCaptcha] Calling vision model with enhanced prompt...")
+                log.info("[hCaptcha] Enhanced question: %s", enhanced_question[:150])
+                try:
+                    result = await self._classifier.solve({
+                        "type": "HCaptchaClassification",
+                        "question": enhanced_question,
+                        "image": b64_image,
+                    })
+                    log.info("[hCaptcha] Vision raw result: %s", result)
+                    answer = result.get("answer", [])
+                    if not isinstance(answer, list):
+                        # Handle boolean answer (single-cell logic puzzles)
+                        if isinstance(answer, bool):
+                            answer = [0] if answer else [1]
+                        else:
+                            answer = []
+                    log.info("[hCaptcha] Vision answer: %s", answer)
+                except Exception as e:
+                    log.error("[hCaptcha] Vision model FAILED: %s", e)
+                    answer = []
+            else:
+                log.info("[hCaptcha] No vision - using random tiles")
+
+            # Fallback: random tiles if vision failed
+            if not answer:
+                tile_count = tile_info.get("count", 9)
+                
+                # Determine how many tiles to click based on challenge type
+                if challenge_subtype == "logic_puzzle":
+                    # Logic puzzles usually need exactly 1 answer
+                    num_to_click = 1
+                elif tile_count <= 3:
+                    num_to_click = 1
+                elif tile_count <= 6:
+                    num_to_click = min(random.randint(1, 3), tile_count)
+                else:
+                    num_to_click = min(random.randint(2, 4), tile_count)
+                
+                answer = random.sample(range(tile_count), num_to_click)
+                log.warning("[hCaptcha] Random fallback (type=%s, tiles=%d): clicking %s",
+                           challenge_subtype, tile_count, answer)
+
+            # ── Click tiles ──
+            log.info("[hCaptcha] Clicking tiles %s...", answer)
+            try:
+                click_result = await challenge_frame.evaluate(_CLICK_TILES_JS, answer)
+                log.info("[hCaptcha] Click result: %s", click_result)
+            except Exception as e:
+                log.error("[hCaptcha] Tile click failed: %s", e)
+
+            await asyncio.sleep(1)
+
+            # ── Click verify ──
+            log.info("[hCaptcha] Clicking verify...")
+            try:
+                verify_result = await challenge_frame.evaluate(_CLICK_VERIFY_JS)
+                log.info("[hCaptcha] Verify result: %s", verify_result)
+            except Exception as e:
+                log.error("[hCaptcha] Verify click failed: %s", e)
+
+            # ── Wait and check result ──
             await asyncio.sleep(3)
 
+            # Check if token was issued
+            token = await page.evaluate(_EXTRACT_TOKEN_JS)
+            if isinstance(token, str) and len(token) > 20:
+                log.info("[hCaptcha] Token obtained after challenge %d!", challenge_attempt + 1)
+                return token
+
+            # Check if challenge still showing (need to click more or refresh)
+            try:
+                status = await challenge_frame.evaluate(_CHECK_CHALLENGE_STATUS_JS)
+                log.info("[hCaptcha] Status after verify: %s", status)
+
+                if status.get("hasPrompt") and not status.get("hasError"):
+                    # Same challenge still showing - try clicking 2 more tiles
+                    log.info("[hCaptcha] Challenge still active, adding 2 more tiles...")
+                    extra = random.sample(range(tile_info.get("count", 9)), min(2, tile_info.get("count", 9)))
+                    try:
+                        await challenge_frame.evaluate(_CLICK_TILES_JS, extra)
+                        await asyncio.sleep(0.5)
+                        await challenge_frame.evaluate(_CLICK_VERIFY_JS)
+                        await asyncio.sleep(3)
+                        token = await page.evaluate(_EXTRACT_TOKEN_JS)
+                        if isinstance(token, str) and len(token) > 20:
+                            log.info("[hCaptcha] Token obtained after extra tiles!")
+                            return token
+                    except Exception as e:
+                        log.debug("[hCaptcha] Extra click failed: %s", e)
+
+                # If still no token, refresh for a new challenge (unless last attempt)
+                if challenge_attempt < 2:
+                    log.info("[hCaptcha] Refreshing for new challenge...")
+                    try:
+                        await challenge_frame.evaluate(_CLICK_REFRESH_JS)
+                        await asyncio.sleep(3)
+                        continue
+                    except Exception as e:
+                        log.warning("[hCaptcha] Refresh failed: %s", e)
+                        break
+            except Exception as e:
+                log.debug("[hCaptcha] Status check error: %s", e)
+
+        log.warning("[hCaptcha] All challenge attempts exhausted")
+        return None
+
+    async def _screenshot_challenge(self, page, challenge_frame) -> bytes | None:
+        """Screenshot just the challenge iframe for clearest vision results."""
+        try:
+            # Find the iframe element in the parent page
+            challenge_iframe_element = None
+            for f in page.frames:
+                if f.url and "hcaptcha.com" in f.url and ("challenge" in f.url or "checkcaptcha" in f.url):
+                    iframe_handle = await page.query_selector('iframe[src*="hcaptcha.com"][src*="challenge"]')
+                    if iframe_handle:
+                        challenge_iframe_element = iframe_handle
+                        break
+
+            if challenge_iframe_element:
+                try:
+                    bbox = await challenge_iframe_element.bounding_box()
+                    if bbox:
+                        padding = 20
+                        clip = {
+                            "x": max(0, bbox["x"] - padding),
+                            "y": max(0, bbox["y"] - padding),
+                            "width": bbox["width"] + padding * 2,
+                            "height": bbox["height"] + padding * 2,
+                        }
+                        screenshot = await page.screenshot(clip=clip)
+                        log.info("[hCaptcha] Challenge clip screenshot: %d bytes", len(screenshot))
+                        return screenshot
+                except Exception as e:
+                    log.warning("[hCaptcha] Clip screenshot failed: %s", e)
+
+            # Fallback: screenshot challenge frame content
+            try:
+                screenshot = await challenge_frame.page.screenshot()
+                log.info("[hCaptcha] Full page screenshot: %d bytes", len(screenshot))
+                return screenshot
+            except Exception as e:
+                log.error("[hCaptcha] Screenshot failed: %s", e)
+        except Exception as e:
+            log.error("[hCaptcha] Screenshot error: %s", e)
         return None
 
     async def _human_mouse_move(self, page, x1: int, y1: int, x2: int, y2: int) -> None:
